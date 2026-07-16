@@ -10,5 +10,7 @@
 // 1. examples/generator-basic
 // 2. examples/lease-runtime
 //
+// 更完整的使用与测试说明见 README.md 和 docs/ 目录。
+//
 // 注释规范见 docs/standards/code-commenting.md。
 package idgen
