@@ -44,8 +44,8 @@ func TestSystemClockUsesWallAndMonotonicTimeAndHonorsCancellation(t *testing.T) 
 }
 
 func TestGeneratorHelpersValidateRangesAndPreserveExplicitIDs(t *testing.T) {
-	if _, err := NewGenerator(Config{NodeID: 1, SmallRollbackWait: -time.Millisecond}, nil); err == nil {
-		t.Fatal("NewGenerator() with negative rollback wait succeeded")
+	if _, err := NewGenerator(Config{NodeID: 1, SmallRollbackWait: -time.Millisecond}, nil); !errors.Is(err, ErrInvalidGeneratorConfig) {
+		t.Fatalf("NewGenerator() error = %v, want ErrInvalidGeneratorConfig", err)
 	}
 	generator, err := NewGenerator(Config{NodeID: 7, EpochMillis: 1_000}, &fakeClock{now: 2_000})
 	if err != nil {
@@ -86,6 +86,10 @@ func TestGeneratorHelpersValidateRangesAndPreserveExplicitIDs(t *testing.T) {
 	if err != nil || generatedID != 99 {
 		t.Fatalf("EnsureID(generator) = %d, %v; want 99, nil", generatedID, err)
 	}
+
+	if _, err := nilGenerator.Next(context.Background()); !errors.Is(err, ErrNilGenerator) {
+		t.Fatalf("nil Next() error = %v, want ErrNilGenerator", err)
+	}
 }
 
 func TestComposeAndDecodeRejectInvalidSnowflakeParts(t *testing.T) {
@@ -100,8 +104,8 @@ func TestComposeAndDecodeRejectInvalidSnowflakeParts(t *testing.T) {
 		{name: "timestamp before epoch", timestamp: 999, epoch: 1_000, wantErr: ErrTimestampBeforeEpoch},
 		{name: "negative node", timestamp: 1_001, epoch: 1_000, nodeCode: -1, wantErr: ErrInvalidNodeID},
 		{name: "node overflow", timestamp: 1_001, epoch: 1_000, nodeCode: MaxNodeID, wantErr: ErrInvalidNodeID},
-		{name: "negative sequence", timestamp: 1_001, epoch: 1_000, sequence: -1},
-		{name: "sequence overflow", timestamp: 1_001, epoch: 1_000, sequence: MaxSequence + 1},
+		{name: "negative sequence", timestamp: 1_001, epoch: 1_000, sequence: -1, wantErr: ErrInvalidSequence},
+		{name: "sequence overflow", timestamp: 1_001, epoch: 1_000, sequence: MaxSequence + 1, wantErr: ErrInvalidSequence},
 		{name: "timestamp overflow", timestamp: 1_000 + maxTimestamp + 1, epoch: 1_000, wantErr: ErrTimestampOverflow},
 	}
 	for _, test := range tests {
@@ -115,8 +119,8 @@ func TestComposeAndDecodeRejectInvalidSnowflakeParts(t *testing.T) {
 			}
 		})
 	}
-	if _, err := Decode(0, 0); err == nil {
-		t.Fatal("Decode(0) succeeded")
+	if _, err := Decode(0, 0); !errors.Is(err, ErrInvalidID) {
+		t.Fatalf("Decode(0) error = %v, want ErrInvalidID", err)
 	}
 	if _, err := Decode(1<<timeShift, math.MaxInt64); !errors.Is(err, ErrTimestampOverflow) {
 		t.Fatalf("Decode(timestamp overflow) error = %v, want ErrTimestampOverflow", err)

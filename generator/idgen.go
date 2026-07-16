@@ -35,8 +35,12 @@ const (
 )
 
 var (
+	// ErrInvalidGeneratorConfig 表示生成器自身配置不合法。
+	ErrInvalidGeneratorConfig = errors.New("idgen: invalid generator config")
 	// ErrInvalidNodeID 表示节点编号超出允许范围。
 	ErrInvalidNodeID = errors.New("idgen: invalid node_id")
+	// ErrNilGenerator 表示调用方在空生成器上执行发号操作。
+	ErrNilGenerator = errors.New("idgen: nil generator")
 	// ErrClockRollback 表示当前时钟落后于已发号时间。
 	ErrClockRollback = errors.New("idgen: clock moved backwards")
 	// ErrTimestampBeforeEpoch 表示发号时间早于纪元起点。
@@ -51,6 +55,10 @@ var (
 	ErrGenerationFenceReached = errors.New("idgen: generation fence reached")
 	// ErrInvalidGenerationRange 表示 floor 或 fence 参数非法。
 	ErrInvalidGenerationRange = errors.New("idgen: invalid generation range")
+	// ErrInvalidSequence 表示序列号超出允许范围。
+	ErrInvalidSequence = errors.New("idgen: sequence out of range")
+	// ErrInvalidID 表示传入的雪花 ID 原始值非法。
+	ErrInvalidID = errors.New("idgen: id must be positive")
 	// ErrZeroID 表示本次组合出的雪花 ID 为保留值 0。
 	ErrZeroID = errors.New("idgen: generated id is zero")
 	// ErrGeneratorMissing 表示调用方要求补发 ID，但没有可用生成器。
@@ -170,7 +178,7 @@ func NewGenerator(cfg Config, clock Clock) (*Generator, error) {
 		epochMillis = DefaultEpochMillis
 	}
 	if cfg.SmallRollbackWait < 0 {
-		return nil, fmt.Errorf("idgen: small rollback wait must be non-negative")
+		return nil, fmt.Errorf("%w: small rollback wait must be non-negative", ErrInvalidGeneratorConfig)
 	}
 	smallRollbackWait := cfg.SmallRollbackWait
 	if smallRollbackWait == 0 {
@@ -227,7 +235,7 @@ func (g *Generator) NextWithin(ctx context.Context, floorMillis int64, fenceMill
 
 func (g *Generator) next(ctx context.Context, floorMillis int64, fenceMillis int64) (int64, error) {
 	if g == nil {
-		return 0, errors.New("idgen: nil generator")
+		return 0, ErrNilGenerator
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -328,7 +336,7 @@ func Compose(timestampMillis int64, epochMillis int64, nodeCode int64, sequence 
 		return 0, fmt.Errorf("%w: node_code=%d", ErrInvalidNodeID, nodeCode)
 	}
 	if sequence < 0 || sequence > MaxSequence {
-		return 0, fmt.Errorf("idgen: sequence out of range: %d", sequence)
+		return 0, fmt.Errorf("%w: %d", ErrInvalidSequence, sequence)
 	}
 	relativeMillis := timestampMillis - epochMillis
 	if relativeMillis > maxTimestamp {
@@ -344,7 +352,7 @@ func Compose(timestampMillis int64, epochMillis int64, nodeCode int64, sequence 
 // Decode 把雪花 ID 还原为时间戳、节点编号和序列号。
 func Decode(id int64, epochMillis int64) (Parts, error) {
 	if id <= 0 {
-		return Parts{}, fmt.Errorf("idgen: id must be positive")
+		return Parts{}, ErrInvalidID
 	}
 	if epochMillis == 0 {
 		epochMillis = DefaultEpochMillis

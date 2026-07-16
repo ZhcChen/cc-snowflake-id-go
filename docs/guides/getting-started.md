@@ -12,7 +12,7 @@
 
 ## 安装
 
-在调用方项目中执行 `go get github.com/ZhcChen/cc-snowflake-id-go@v0.1.0`。
+在调用方项目中执行 `go get github.com/ZhcChen/cc-snowflake-id-go@v0.1.1`。
 
 ## 建议的接入顺序
 

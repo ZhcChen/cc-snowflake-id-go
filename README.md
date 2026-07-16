@@ -33,7 +33,7 @@
 
 ## 快速入口
 
-- 安装：`go get github.com/ZhcChen/cc-snowflake-id-go@v0.1.0`
+- 安装：`go get github.com/ZhcChen/cc-snowflake-id-go@v0.1.1`
 - 单进程 demo：[examples/generator-basic/main.go](examples/generator-basic/main.go)
 - 多实例租约 demo：[examples/lease-runtime/main.go](examples/lease-runtime/main.go)
 - 租约表示例：[examples/lease-runtime/schema.sql](examples/lease-runtime/schema.sql)
