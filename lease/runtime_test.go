@@ -7,6 +7,12 @@ import (
 	"testing"
 )
 
+func TestStartRuntimeRejectsNilGenerator(t *testing.T) {
+	if _, err := StartRuntime(context.Background(), nil); !errors.Is(err, ErrInvalidLeaseConfig) {
+		t.Fatalf("StartRuntime(nil) error = %v, want ErrInvalidLeaseConfig", err)
+	}
+}
+
 func TestRuntimeStopCancelsJoinsThenCloses(t *testing.T) {
 	generator := newRuntimeTestGenerator()
 	runtime, err := StartRuntime(context.Background(), generator)
@@ -62,15 +68,71 @@ func TestRuntimeRefreshFailureCancelsWorkAndPreservesRootCause(t *testing.T) {
 	}
 }
 
+func TestRuntimeNilAndZeroValueAccessorsAreSafe(t *testing.T) {
+	var nilRuntime *Runtime
+	if nilRuntime.Context() == nil {
+		t.Fatal("nil runtime Context() returned nil")
+	}
+	select {
+	case <-nilRuntime.Done():
+	default:
+		t.Fatal("nil runtime Done() should return a closed channel")
+	}
+	if err := nilRuntime.Err(); err != nil {
+		t.Fatalf("nil runtime Err() = %v, want nil", err)
+	}
+	if err := nilRuntime.Stop(nil); err != nil {
+		t.Fatalf("nil runtime Stop() = %v, want nil", err)
+	}
+
+	zeroRuntime := &Runtime{}
+	if zeroRuntime.Context() == nil {
+		t.Fatal("zero runtime Context() returned nil")
+	}
+	select {
+	case <-zeroRuntime.Done():
+	default:
+		t.Fatal("zero runtime Done() should return a closed channel")
+	}
+	if err := zeroRuntime.Err(); err != nil {
+		t.Fatalf("zero runtime Err() = %v, want nil", err)
+	}
+}
+
+func TestRuntimeUnexpectedRefreshLoopStopBecomesTerminalError(t *testing.T) {
+	generator := newRuntimeTestGenerator()
+	generator.returnImmediately = true
+
+	runtime, err := StartRuntime(nil, generator)
+	if err != nil {
+		t.Fatalf("StartRuntime(nil parent) error = %v", err)
+	}
+	<-runtime.Done()
+
+	if err := runtime.Err(); !errors.Is(err, ErrRefreshLoopStopped) {
+		t.Fatalf("Err() = %v, want ErrRefreshLoopStopped", err)
+	}
+	if cause := context.Cause(runtime.Context()); !errors.Is(cause, ErrRefreshLoopStopped) {
+		t.Fatalf("runtime cause = %v, want ErrRefreshLoopStopped", cause)
+	}
+	if err := runtime.Stop(context.Background()); !errors.Is(err, ErrRefreshLoopStopped) {
+		t.Fatalf("Stop() error = %v, want ErrRefreshLoopStopped", err)
+	}
+	if operations := generator.operationSnapshot(); !equalStrings(operations, []string{"refresh-start", "refresh-end", "close"}) {
+		t.Fatalf("operations = %#v, want refresh completion before close", operations)
+	}
+}
+
 type runtimeTestGenerator struct {
 	mu sync.Mutex
 
-	refreshStarted chan struct{}
-	failRefresh    chan struct{}
-	refreshErr     error
-	closeErr       error
-	closeCalls     int
-	operations     []string
+	refreshStarted    chan struct{}
+	failRefresh       chan struct{}
+	refreshErr        error
+	returnImmediately bool
+	closeErr          error
+	closeCalls        int
+	operations        []string
 }
 
 func newRuntimeTestGenerator() *runtimeTestGenerator {
@@ -81,7 +143,9 @@ func (g *runtimeTestGenerator) RunRefreshLoop(ctx context.Context) error {
 	g.record("refresh-start")
 	close(g.refreshStarted)
 	var err error
-	if g.failRefresh != nil {
+	if g.returnImmediately {
+		err = g.refreshErr
+	} else if g.failRefresh != nil {
 		select {
 		case <-g.failRefresh:
 			err = g.refreshErr

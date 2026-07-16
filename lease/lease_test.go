@@ -498,6 +498,92 @@ func TestLeasedGeneratorRequiresAcquire(t *testing.T) {
 	}
 }
 
+func TestLeasedGeneratorNextUsesBackgroundWhenContextIsNil(t *testing.T) {
+	store := &fakeLeaseStore{
+		acquireResults: []fakeAcquireResult{{
+			state: LeaseState{
+				NodeID:                7,
+				OwnerID:               "api:host:1:abc",
+				ReservedUntilMillis:   3_000,
+				DatabaseNowMillis:     2_000,
+				GenerationFenceMillis: 3_000,
+			},
+			acquired: true,
+		}},
+	}
+	clock := &fakeClock{now: 2_000}
+	generator, err := NewLeasedGenerator(store, clock, LeasedGeneratorConfig{
+		NodeID:                7,
+		OwnerID:               "api:host:1:abc",
+		EpochMillis:           1_000,
+		LeaseWindow:           time.Second,
+		LeaseAcquireTimeout:   10 * time.Millisecond,
+		LeaseOperationTimeout: 10 * time.Millisecond,
+		LeaseRefreshInterval:  100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewLeasedGenerator() error = %v", err)
+	}
+	if _, err := generator.Acquire(context.Background()); err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+
+	id, err := generator.Next(nil)
+	if err != nil {
+		t.Fatalf("Next(nil) error = %v", err)
+	}
+	parts, err := sf.Decode(id, 1_000)
+	if err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if parts.TimestampMillis != 2_000 || parts.NodeID != 7 || parts.Sequence != 0 {
+		t.Fatalf("parts = %+v, want timestamp=2000 node=7 sequence=0", parts)
+	}
+}
+
+func TestLeasedGeneratorNextRejectsPreCanceledContextWithoutBecomingTerminal(t *testing.T) {
+	store := &fakeLeaseStore{
+		acquireResults: []fakeAcquireResult{{
+			state: LeaseState{
+				NodeID:                7,
+				OwnerID:               "api:host:1:abc",
+				ReservedUntilMillis:   3_000,
+				DatabaseNowMillis:     2_000,
+				GenerationFenceMillis: 3_000,
+			},
+			acquired: true,
+		}},
+	}
+	clock := &fakeClock{now: 2_000}
+	generator, err := NewLeasedGenerator(store, clock, LeasedGeneratorConfig{
+		NodeID:                7,
+		OwnerID:               "api:host:1:abc",
+		EpochMillis:           1_000,
+		LeaseWindow:           time.Second,
+		LeaseAcquireTimeout:   10 * time.Millisecond,
+		LeaseOperationTimeout: 10 * time.Millisecond,
+		LeaseRefreshInterval:  100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewLeasedGenerator() error = %v", err)
+	}
+	if _, err := generator.Acquire(context.Background()); err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := generator.Next(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next(canceled) error = %v, want context.Canceled", err)
+	}
+	if store.refreshCalls != 0 {
+		t.Fatalf("refreshCalls = %d, want 0", store.refreshCalls)
+	}
+	if _, err := generator.Next(context.Background()); err != nil {
+		t.Fatalf("Next() after caller cancellation error = %v, want generator to remain active", err)
+	}
+}
+
 func TestLeasedGeneratorNextDoesNotRefreshPerID(t *testing.T) {
 	store := &fakeLeaseStore{
 		acquireResults: []fakeAcquireResult{{
@@ -675,6 +761,59 @@ func TestLeasedGeneratorStopsAfterRefreshFailure(t *testing.T) {
 	}
 }
 
+func TestLeasedGeneratorNextFailsWhenInternalRefreshTimesOut(t *testing.T) {
+	var refreshCtxErr error
+	store := &fakeLeaseStore{
+		acquireResults: []fakeAcquireResult{{
+			state: LeaseState{
+				NodeID:                7,
+				OwnerID:               "api:host:1:abc",
+				ReservedUntilMillis:   2_050,
+				DatabaseNowMillis:     2_000,
+				GenerationFenceMillis: 3_000,
+			},
+			acquired: true,
+		}},
+		refreshErr: context.DeadlineExceeded,
+		refreshHook: func(ctx context.Context) {
+			<-ctx.Done()
+			refreshCtxErr = ctx.Err()
+		},
+	}
+	clock := &fakeClock{now: 2_000}
+	generator, err := NewLeasedGenerator(store, clock, LeasedGeneratorConfig{
+		NodeID:                7,
+		OwnerID:               "api:host:1:abc",
+		EpochMillis:           1_000,
+		LeaseWindow:           2 * time.Second,
+		FenceWindow:           2 * time.Second,
+		MaxClockSkew:          time.Second,
+		LeaseAcquireTimeout:   10 * time.Millisecond,
+		LeaseOperationTimeout: 10 * time.Millisecond,
+		LeaseRefreshInterval:  100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewLeasedGenerator() error = %v", err)
+	}
+	if _, err := generator.Acquire(context.Background()); err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+
+	_, err = generator.Next(context.Background())
+	if !errors.Is(err, ErrLeaseStore) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Next() error = %v, want ErrLeaseStore wrapping context.DeadlineExceeded", err)
+	}
+	if !errors.Is(refreshCtxErr, context.DeadlineExceeded) {
+		t.Fatalf("refresh ctx error = %v, want context.DeadlineExceeded", refreshCtxErr)
+	}
+	if store.refreshCalls != 1 {
+		t.Fatalf("refreshCalls = %d, want 1", store.refreshCalls)
+	}
+	if _, err := generator.Next(context.Background()); !errors.Is(err, ErrLeaseStore) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("subsequent Next() error = %v, want cached terminal timeout", err)
+	}
+}
+
 func TestLeaseManagerWaitsForGenerationFenceBeforeAcquire(t *testing.T) {
 	store := &fakeLeaseStore{acquireResults: []fakeAcquireResult{
 		{
@@ -827,6 +966,56 @@ func TestLeasedGeneratorExtendsFenceAfterSequenceWait(t *testing.T) {
 	}
 	if state := generator.State(); state.GenerationFenceMillis != 2_010 {
 		t.Fatalf("state = %+v, want extended fence=2010", state)
+	}
+}
+
+func TestLeasedGeneratorStopsWhenFenceExtensionRefreshFails(t *testing.T) {
+	store := &fakeLeaseStore{
+		acquireResults: []fakeAcquireResult{{
+			state: LeaseState{
+				NodeID:                7,
+				OwnerID:               "api:host:1:abc",
+				ReservedUntilMillis:   3_000,
+				DatabaseNowMillis:     2_000,
+				GenerationFenceMillis: 2_005,
+			},
+			acquired: true,
+		}},
+		refreshErr: ErrLeaseLost,
+	}
+	clock := &fakeClock{now: 2_004}
+	generator, err := NewLeasedGenerator(store, clock, LeasedGeneratorConfig{
+		NodeID:                7,
+		OwnerID:               "api:host:1:abc",
+		EpochMillis:           1_000,
+		LeaseWindow:           time.Second,
+		FenceWindow:           5 * time.Millisecond,
+		MaxClockSkew:          time.Second,
+		LeaseAcquireTimeout:   10 * time.Millisecond,
+		LeaseOperationTimeout: time.Millisecond,
+		LeaseRefreshInterval:  500 * time.Microsecond,
+	})
+	if err != nil {
+		t.Fatalf("NewLeasedGenerator() error = %v", err)
+	}
+	if _, err := generator.Acquire(context.Background()); err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+	for i := int64(0); i <= sf.MaxSequence; i++ {
+		if _, err := generator.Next(context.Background()); err != nil {
+			t.Fatalf("warmup Next(%d) error = %v", i, err)
+		}
+	}
+
+	_, err = generator.Next(context.Background())
+	if !errors.Is(err, ErrLeaseLost) || !errors.Is(err, ErrLeaseStore) {
+		t.Fatalf("Next() error = %v, want ErrLeaseLost wrapped by ErrLeaseStore", err)
+	}
+	if store.refreshCalls != 1 {
+		t.Fatalf("refreshCalls = %d, want 1", store.refreshCalls)
+	}
+	if _, err := generator.Next(context.Background()); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("subsequent Next() error = %v, want terminal ErrLeaseLost", err)
 	}
 }
 

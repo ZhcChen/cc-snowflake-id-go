@@ -37,3 +37,20 @@ if err != nil {
 - `docs/standards/code-commenting.md`：注释规范
 
 测试仍然跟随各自包放置，而不是单独放到一个总测试目录。这是 Go 类库的标准组织方式，也更利于包内行为测试和公开 API 测试按职责收敛。
+
+## 测试
+
+默认单元测试：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\test\unit.ps1
+```
+
+PostgreSQL 集成测试：
+
+```powershell
+$env:IDGEN_TEST_DATABASE_URL = "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+powershell -ExecutionPolicy Bypass -File .\scripts\test\integration.ps1
+```
+
+仓库内置了 `.github/workflows/test.yml`，会分别执行默认单元测试和带 `integration` build tag 的 PostgreSQL 集成测试。

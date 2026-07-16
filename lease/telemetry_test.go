@@ -85,6 +85,89 @@ func TestTelemetryCountsConcurrentGenerationAndFixedFailureClasses(t *testing.T)
 	}
 }
 
+func TestTelemetryNilReceiverAndNilEventSinkAreSafe(t *testing.T) {
+	var nilTelemetry *Telemetry
+	if nilTelemetry.Events() != nil {
+		t.Fatal("nil telemetry Events() should return nil")
+	}
+	nilTelemetry.ObserveGenerated()
+	nilTelemetry.ObserveAcquired(LeaseState{NodeID: 7, OwnerID: "owner-a"})
+	nilTelemetry.ObserveRefresh(true)
+	nilTelemetry.ObserveFailed(LeaseState{NodeID: 7, OwnerID: "owner-a"}, ErrLeaseLost)
+	nilTelemetry.ObserveClosed(LeaseState{NodeID: 7, OwnerID: "owner-a"}, ErrLeaseLost)
+	nilSnapshot := nilTelemetry.counterSnapshot()
+	if nilSnapshot.failureTotal != 0 || nilSnapshot.closeTotal != 0 || nilSnapshot.lastErrorClass != ErrorClassNone {
+		t.Fatalf("nil telemetry snapshot = %+v, want zero counters", nilSnapshot)
+	}
+
+	sinkless := &Telemetry{}
+	if sinkless.Events() != nil {
+		t.Fatal("sinkless telemetry Events() should return nil")
+	}
+	sinkless.ObserveAcquired(LeaseState{NodeID: 7, OwnerID: "owner-a"})
+	sinkless.ObserveRefresh(true)
+	sinkless.ObserveRefresh(false)
+	sinkless.ObserveFailed(LeaseState{NodeID: 7, OwnerID: "owner-a"}, ErrLeaseUnavailable)
+	sinkless.ObserveClosed(LeaseState{NodeID: 7, OwnerID: "owner-a"}, nil)
+
+	snapshot := sinkless.counterSnapshot()
+	if snapshot.acquireSuccessTotal != 1 || snapshot.refreshSuccessTotal != 1 || snapshot.refreshFailureTotal != 1 {
+		t.Fatalf("sinkless refresh/acquire totals = %+v", snapshot)
+	}
+	if snapshot.failureTotal != 1 || snapshot.failures.LeaseBusy != 1 {
+		t.Fatalf("sinkless failure totals = %+v", snapshot)
+	}
+	if snapshot.closeTotal != 1 || snapshot.droppedEventsTotal != 0 || snapshot.lastErrorClass != ErrorClassLeaseBusy {
+		t.Fatalf("sinkless close/event totals = %+v", snapshot)
+	}
+}
+
+func TestTelemetryFailureCountersCoverEveryErrorClass(t *testing.T) {
+	telemetry := NewTelemetryWithConfig(TelemetryConfig{EventBufferSize: 32})
+	state := LeaseState{NodeID: 7, OwnerID: "owner-a"}
+	cases := []struct {
+		name string
+		err  error
+		want ErrorClass
+	}{
+		{name: "clock rollback", err: sf.ErrClockRollback, want: ErrorClassClockRollback},
+		{name: "clock skew", err: ErrClockSkew, want: ErrorClassClockSkew},
+		{name: "fence ahead", err: ErrGenerationFenceAhead, want: ErrorClassFenceAhead},
+		{name: "lease busy", err: ErrLeaseUnavailable, want: ErrorClassLeaseBusy},
+		{name: "lease lost", err: ErrLeaseLost, want: ErrorClassLeaseLost},
+		{name: "closed", err: ErrGeneratorClosed, want: ErrorClassClosed},
+		{name: "canceled", err: context.DeadlineExceeded, want: ErrorClassCanceled},
+		{name: "store failure", err: fmt.Errorf("%w: unavailable", ErrLeaseStore), want: ErrorClassStoreFailure},
+		{name: "unknown", err: errors.New("unexpected"), want: ErrorClassUnknown},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			telemetry.ObserveFailed(state, test.err)
+			select {
+			case event := <-telemetry.Events():
+				if event.Kind != EventFailed || event.ErrorClass != test.want || event.NodeID != 7 || event.OwnerID != "owner-a" {
+					t.Fatalf("event = %+v, want kind=failed class=%q node=7 owner=owner-a", event, test.want)
+				}
+			default:
+				t.Fatalf("missing event for %s", test.name)
+			}
+		})
+	}
+
+	snapshot := telemetry.counterSnapshot()
+	if snapshot.failureTotal != uint64(len(cases)) {
+		t.Fatalf("failure total = %d, want %d", snapshot.failureTotal, len(cases))
+	}
+	if snapshot.failures.ClockRollback != 1 || snapshot.failures.ClockSkew != 1 || snapshot.failures.FenceAhead != 1 ||
+		snapshot.failures.LeaseBusy != 1 || snapshot.failures.LeaseLost != 1 || snapshot.failures.Closed != 1 ||
+		snapshot.failures.Canceled != 1 || snapshot.failures.StoreFailure != 1 || snapshot.failures.Unknown != 1 {
+		t.Fatalf("failure counters = %+v, want one count per class", snapshot.failures)
+	}
+	if snapshot.lastErrorClass != ErrorClassUnknown {
+		t.Fatalf("last error class = %q, want %q", snapshot.lastErrorClass, ErrorClassUnknown)
+	}
+}
+
 func TestTelemetryEventBufferSizeIsConfigurable(t *testing.T) {
 	telemetry := NewTelemetryWithConfig(TelemetryConfig{EventBufferSize: 1})
 	if got := cap(telemetry.Events()); got != 1 {

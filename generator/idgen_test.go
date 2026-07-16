@@ -243,6 +243,66 @@ func TestGeneratorRejectsLargeClockRollback(t *testing.T) {
 	}
 }
 
+func TestGeneratorPropagatesRollbackWaitCancellation(t *testing.T) {
+	clock := &fakeClock{now: 1_995}
+	g, err := NewGenerator(Config{
+		NodeID:            1,
+		EpochMillis:       1_000,
+		SmallRollbackWait: 10 * time.Millisecond,
+	}, clock)
+	if err != nil {
+		t.Fatalf("NewGenerator() error = %v", err)
+	}
+	g.lastMillis = 2_000
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := g.Next(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next() error = %v, want context.Canceled", err)
+	}
+	if len(clock.sleeps) != 1 || clock.sleeps[0] != 2_000 {
+		t.Fatalf("sleeps = %#v, want [2000]", clock.sleeps)
+	}
+}
+
+func TestGeneratorPropagatesRollbackWaitClockFailure(t *testing.T) {
+	sleepErr := errors.New("clock unavailable")
+	clock := &fakeClock{now: 1_995, err: sleepErr}
+	g, err := NewGenerator(Config{
+		NodeID:            1,
+		EpochMillis:       1_000,
+		SmallRollbackWait: 10 * time.Millisecond,
+	}, clock)
+	if err != nil {
+		t.Fatalf("NewGenerator() error = %v", err)
+	}
+	g.lastMillis = 2_000
+
+	if _, err := g.Next(context.Background()); !errors.Is(err, sleepErr) {
+		t.Fatalf("Next() error = %v, want %v", err, sleepErr)
+	}
+}
+
+func TestGeneratorRejectsRollbackWhenClockStillBehindAfterWait(t *testing.T) {
+	clock := &stalledRollbackClock{now: 1_995}
+	g, err := NewGenerator(Config{
+		NodeID:            1,
+		EpochMillis:       1_000,
+		SmallRollbackWait: 10 * time.Millisecond,
+	}, clock)
+	if err != nil {
+		t.Fatalf("NewGenerator() error = %v", err)
+	}
+	g.lastMillis = 2_000
+
+	if _, err := g.Next(context.Background()); !errors.Is(err, ErrClockRollback) {
+		t.Fatalf("Next() error = %v, want ErrClockRollback", err)
+	}
+	if len(clock.sleeps) != 1 || clock.sleeps[0] != 2_000 {
+		t.Fatalf("sleeps = %#v, want [2000]", clock.sleeps)
+	}
+}
+
 func TestComposeRejectsZeroID(t *testing.T) {
 	_, err := Compose(1_000, 1_000, 0, 0)
 	if !errors.Is(err, ErrZeroID) {
@@ -260,4 +320,26 @@ func TestGeneratorRejectsTimestampBeforeEpoch(t *testing.T) {
 	if !errors.Is(err, ErrTimestampBeforeEpoch) {
 		t.Fatalf("Next error = %v, want ErrTimestampBeforeEpoch", err)
 	}
+}
+
+type stalledRollbackClock struct {
+	now    int64
+	sleeps []int64
+}
+
+func (c *stalledRollbackClock) NowMillis() int64 {
+	return c.now
+}
+
+func (c *stalledRollbackClock) MonotonicMillis() int64 {
+	return c.now
+}
+
+func (c *stalledRollbackClock) SleepUntil(_ context.Context, millis int64) error {
+	c.sleeps = append(c.sleeps, millis)
+	return nil
+}
+
+func (c *stalledRollbackClock) Sleep(context.Context, time.Duration) error {
+	return nil
 }
