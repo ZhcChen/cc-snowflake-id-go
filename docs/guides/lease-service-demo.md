@@ -6,7 +6,7 @@
 
 - 应用启动时创建 `PGLeaseStore`、`Telemetry` 和 `LeasedGenerator`
 - 启动时先 `Acquire`，再 `StartRuntime`
-- 监听 `Runtime.Done()` / `Runtime.Err()`，runtime 异常退出后让宿主服务退出
+- 监听 `Runtime.Done()` / `Runtime.Err()`，在 runtime 终态后摘掉 `ready` 并重建组件
 - 区分 `/healthz` 与 `/readyz`
 - 用 `RunReporter` 周期输出 `idgen_status`，并输出离散 `idgen_event`
 - 暴露 `/next` 与 `/snapshot`，方便本地验证完整链路
@@ -40,9 +40,17 @@
 ## 这个 demo 适合拿来复用的部分
 
 - HTTP 服务启动顺序
-- runtime 异常退出时的 fail-fast 策略
+- runtime watcher 与日志打点的接线方式
+- 旧组件摘除、重建新组件和轻量退避的宿主编排方式
 - `RunReporter` 与结构化日志输出方式
 - `readyz` 响应体中 `checks.id_generator` 的返回口径
+
+## 这份 demo 的推荐定位
+
+- 这份 demo 演示的是当前推荐的宿主接法：runtime 进入明确终态错误后，先摘掉 `ready`，停止旧组件，再完整重建一套新的 `owner_id`、`LeasedGenerator` 和 `Runtime`。
+- 它适合演示完整链路、观测点，以及“组件级重建而不是整进程退出”的接入方式。
+- 组件级重建时通常继续沿用同一个 `node_id`；真正需要判死的是当前 ID 组件实例，不是 `node_id` 本身。
+- 如果宿主暂时做不到组件级重建，再退回到“进程退出 + 外部拉起”的保守 fallback。
 
 ## 相关文档
 

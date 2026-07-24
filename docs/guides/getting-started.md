@@ -25,7 +25,7 @@
 1. 先运行 [examples/generator-basic/main.go](../../examples/generator-basic/main.go)，确认当前 Go 环境和依赖拉取正常。
 2. 如果目标场景是多实例部署，再继续运行 [examples/lease-runtime/main.go](../../examples/lease-runtime/main.go)，验证数据库连接、租约表结构和最小生命周期链路。
 3. 准备接入真实业务宿主前，先阅读 [`lease` 生产接入指南](lease-production-integration.md)，明确 `readyz`、runtime 失效和运行态诊断的约束。
-4. 需要把 HTTP 服务生命周期、`/healthz`、`/readyz`、`RunReporter` 和 fail-fast 串起来时，直接参考 [examples/lease-service/main.go](../../examples/lease-service/main.go)。
+4. 需要把 HTTP 服务生命周期、`/healthz`、`/readyz`、`RunReporter` 和组件级重建串起来时，直接参考 [examples/lease-service/main.go](../../examples/lease-service/main.go)。
 5. 接入完成后，按 [测试与 CI](../testing/ci-and-tests.md) 执行本地验证。
 
 ## 下一步文档

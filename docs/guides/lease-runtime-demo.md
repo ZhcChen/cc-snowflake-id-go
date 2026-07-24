@@ -42,7 +42,7 @@
 ## 这个 demo 不覆盖什么
 
 - 不负责演示 `/healthz` 与 `/readyz` 的分工
-- 不负责演示 `Runtime.Done()` / `Runtime.Err()` 异常退出后的宿主 fail-fast
+- 不负责演示 `Runtime.Done()` / `Runtime.Err()` 异常退出后的宿主恢复策略，例如组件级重建
 - 不负责演示 `RunReporter` 周期状态日志和事件日志
 
 如果你需要把这些能力接到真实服务生命周期，请继续看 [`lease` 生产接入指南](lease-production-integration.md) 和 [宿主型服务 demo 说明](lease-service-demo.md)。
