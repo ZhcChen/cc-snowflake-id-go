@@ -1,4 +1,4 @@
-# lease Demo 说明
+# lease 最小 demo 说明
 
 这个文档说明 [examples/lease-runtime/main.go](../../examples/lease-runtime/main.go) 的运行前提、演示流程和接入含义。
 
@@ -16,7 +16,7 @@
 ## 运行前提
 
 - 有可访问的 PostgreSQL 实例
-- 已创建租约表，表结构见 [examples/lease-runtime/schema.sql](../../examples/lease-runtime/schema.sql)
+- 已创建租约表，表结构见 [schema.sql](../../examples/lease-runtime/schema.sql)
 - 已设置环境变量 `IDGEN_DATABASE_URL`
 
 ## 运行方式
@@ -39,8 +39,10 @@
 - 把 `StartRuntime` / `Stop` 接入应用启动和退出流程
 - 把 `Telemetry` / `Snapshot` 接入日志、监控或健康检查逻辑
 
-## 相关说明
+## 这个 demo 不覆盖什么
 
-- 如果只是单实例服务，不需要这个 demo，直接使用 `generator`
-- 本 demo 是最小接入链路，不等于生产环境全部配置
-- 本地与 CI 的测试入口见 [测试与 CI](../testing/ci-and-tests.md)
+- 不负责演示 `/healthz` 与 `/readyz` 的分工
+- 不负责演示 `Runtime.Done()` / `Runtime.Err()` 异常退出后的宿主 fail-fast
+- 不负责演示 `RunReporter` 周期状态日志和事件日志
+
+如果你需要把这些能力接到真实服务生命周期，请继续看 [`lease` 生产接入指南](lease-production-integration.md) 和 [宿主型服务 demo 说明](lease-service-demo.md)。
