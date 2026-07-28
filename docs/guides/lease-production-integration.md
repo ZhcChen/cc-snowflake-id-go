@@ -64,7 +64,7 @@
 ## 宿主生命周期硬约束
 
 - 任何会写业务主键的服务，都不应在 `Acquire` 之前开始对外提供写入路径。
-- `Runtime.Err()` 是运行时终态原因；如果它不是 `context.Canceled` 或 `context.DeadlineExceeded`，宿主不应继续留在 ready 状态。
+- `Runtime.Err()` 是运行时终态原因；当宿主 root context 仍处于活动状态时，任何非 nil 错误都必须按组件失败处理。不能只因 `errors.Is(err, context.DeadlineExceeded)` 就忽略它，因为 lease operation timeout 会包装这个 sentinel，且应触发重建或保守退出。
 - 一旦当前组件实例进入终态，宿主必须丢弃这套实例，不要试图在原来的 failed `Runtime` / `LeasedGenerator` 上继续补救。
 - 组件级重建成功前，宿主必须持续保持 `not ready`，避免旧实例失效后继续接收写流量。
 - `Next`、`Acquire`、`Ready`、`Runtime.Err()` 返回的错误都可以配合 `lease.ClassifyError` 做稳定分类，方便业务系统记录可检索日志。

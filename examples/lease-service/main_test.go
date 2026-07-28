@@ -29,6 +29,7 @@ type testLeaseStore struct {
 	defaultAcquire testAcquireResult
 	refreshState   leaseidgen.LeaseState
 	refreshErr     error
+	refreshResults []error
 	releaseErr     error
 	acquireCalls   int
 	refreshCalls   int
@@ -102,7 +103,12 @@ func (s *testLeaseStore) Refresh(
 	if state.GenerationFenceMillis == 0 {
 		state.GenerationFenceMillis = generationFenceMillis
 	}
-	return state, s.refreshErr
+	refreshErr := s.refreshErr
+	if len(s.refreshResults) > 0 {
+		refreshErr = s.refreshResults[0]
+		s.refreshResults = s.refreshResults[1:]
+	}
+	return state, refreshErr
 }
 
 func (s *testLeaseStore) Release(context.Context, int, string) error {
@@ -364,6 +370,44 @@ func TestComponentManagerRebuildsAfterRuntimeFailure(t *testing.T) {
 	if after.OwnerID == before.OwnerID {
 		t.Fatalf("owner_id = %q, want rebuilt owner distinct from %q", after.OwnerID, before.OwnerID)
 	}
+	if calls := store.acquireCallCount(); calls < 2 {
+		t.Fatalf("acquire calls = %d, want at least 2", calls)
+	}
+}
+
+func TestComponentManagerRebuildsAfterLeaseOperationDeadline(t *testing.T) {
+	rootCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store := &testLeaseStore{
+		acquireResults: []testAcquireResult{
+			{acquired: true},
+			{acquired: true},
+		},
+		refreshResults: []error{
+			fmt.Errorf("lease refresh: %w", context.DeadlineExceeded),
+		},
+	}
+	manager := newComponentManager(rootCtx, demoConfig{
+		ServiceName: "svc",
+		NodeID:      7,
+	}, store, testManagerSettings())
+	if err := manager.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer func() {
+		cancel()
+		if err := manager.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown() error = %v", err)
+		}
+	}()
+
+	before := manager.Snapshot()
+	waitForCondition(t, time.Second, func() bool {
+		snapshot := manager.Snapshot()
+		return snapshot.Ready && snapshot.OwnerID != "" && snapshot.OwnerID != before.OwnerID
+	})
+
 	if calls := store.acquireCallCount(); calls < 2 {
 		t.Fatalf("acquire calls = %d, want at least 2", calls)
 	}

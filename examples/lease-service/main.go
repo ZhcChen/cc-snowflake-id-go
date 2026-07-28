@@ -395,7 +395,9 @@ func (m *componentManager) watchComponent(component *managedComponent) {
 
 	<-component.runtime.Done()
 	err := component.runtime.Err()
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	// A lease operation can time out independently of the host lifecycle. Only
+	// the manager root context's cancellation makes a component shutdown expected.
+	if err == nil || m.rootCtx.Err() != nil {
 		return
 	}
 
