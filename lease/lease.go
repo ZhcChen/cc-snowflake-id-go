@@ -477,6 +477,9 @@ type LeasedGeneratorConfig struct {
 	EpochMillis int64
 	// SmallRollbackWait 定义可容忍的小幅时钟回退等待时间。
 	SmallRollbackWait time.Duration
+	// OverCostCount 是 seq 溢出时允许时间戳虚拟前移的最大毫秒数（over cost）；
+	// 为 0 时保持原行为，等待 wall clock 进入下一毫秒。
+	OverCostCount int64
 	// LeaseWindow 是单次租约保留时长。
 	LeaseWindow time.Duration
 	// FenceWindow 是写入 generation fence 时使用的未来窗口。
@@ -542,6 +545,7 @@ func NewLeasedGenerator(store LeaseStore, clock sf.Clock, cfg LeasedGeneratorCon
 		NodeID:            cfg.NodeID,
 		EpochMillis:       cfg.EpochMillis,
 		SmallRollbackWait: cfg.SmallRollbackWait,
+		OverCostCount:     cfg.OverCostCount,
 	}, clock)
 	if err != nil {
 		return nil, err

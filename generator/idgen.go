@@ -143,6 +143,9 @@ type Config struct {
 	EpochMillis int64
 	// SmallRollbackWait 定义可容忍的小幅时钟回退等待时间；为 0 时使用默认值。
 	SmallRollbackWait time.Duration
+	// OverCostCount 是 seq 溢出时允许时间戳虚拟前移的最大毫秒数（over cost）；
+	// 为 0 时保持原行为，等待 wall clock 进入下一毫秒。
+	OverCostCount int64
 }
 
 // Generator 是单进程内使用的雪花 ID 生成器。
@@ -155,6 +158,9 @@ type Generator struct {
 	smallRollbackWait time.Duration
 	lastMillis        int64
 	sequence          int64
+	overCostLimit     int64
+	overCostRemaining int64
+	overCostActive    bool
 }
 
 // Parts 表示一个雪花 ID 解码后的组成部分。
@@ -180,6 +186,9 @@ func NewGenerator(cfg Config, clock Clock) (*Generator, error) {
 	if cfg.SmallRollbackWait < 0 {
 		return nil, fmt.Errorf("%w: small rollback wait must be non-negative", ErrInvalidGeneratorConfig)
 	}
+	if cfg.OverCostCount < 0 {
+		return nil, fmt.Errorf("%w: over cost count must be non-negative", ErrInvalidGeneratorConfig)
+	}
 	smallRollbackWait := cfg.SmallRollbackWait
 	if smallRollbackWait == 0 {
 		smallRollbackWait = 10 * time.Millisecond
@@ -193,6 +202,8 @@ func NewGenerator(cfg Config, clock Clock) (*Generator, error) {
 		nodeCode:          nodeCode,
 		epochMillis:       epochMillis,
 		smallRollbackWait: smallRollbackWait,
+		overCostLimit:     cfg.OverCostCount,
+		overCostRemaining: cfg.OverCostCount,
 	}, nil
 }
 
@@ -245,36 +256,79 @@ func (g *Generator) next(ctx context.Context, floorMillis int64, fenceMillis int
 	defer g.mu.Unlock()
 
 	now := g.clock.NowMillis()
-	if err := g.waitForRollback(ctx, &now); err != nil {
-		return 0, err
+	lastMillis := g.lastMillis
+	sequence := g.sequence
+	overCostActive := g.overCostActive
+	overCostRemaining := g.overCostRemaining
+	if overCostActive && now >= lastMillis {
+		overCostActive = false
+		overCostRemaining = g.overCostLimit
+	}
+	if !overCostActive {
+		if err := g.waitForRollback(ctx, &now); err != nil {
+			return 0, err
+		}
 	}
 	if now < g.epochMillis {
 		return 0, fmt.Errorf("%w: now=%d epoch=%d", ErrTimestampBeforeEpoch, now, g.epochMillis)
 	}
 
-	lastMillis := g.lastMillis
-	sequence := g.sequence
 	switch {
-	case now == g.lastMillis:
-		if g.sequence >= MaxSequence {
-			nextMillis := g.lastMillis + 1
-			if err := g.clock.SleepUntil(ctx, nextMillis); err != nil {
-				return 0, err
+	case now == lastMillis:
+		if sequence >= MaxSequence {
+			if overCostRemaining > 0 {
+				lastMillis++
+				sequence = 0
+				overCostRemaining--
+				overCostActive = true
+			} else {
+				nextMillis := lastMillis + 1
+				if err := g.clock.SleepUntil(ctx, nextMillis); err != nil {
+					return 0, err
+				}
+				now = g.clock.NowMillis()
+				if now <= lastMillis {
+					return 0, fmt.Errorf("%w: now=%d last=%d", ErrClockRollback, now, lastMillis)
+				}
+				lastMillis = now
+				sequence = 0
+				overCostActive = false
+				overCostRemaining = g.overCostLimit
 			}
-			now = g.clock.NowMillis()
-			if now <= g.lastMillis {
-				return 0, fmt.Errorf("%w: now=%d last=%d", ErrClockRollback, now, g.lastMillis)
-			}
-			lastMillis = now
-			sequence = 0
 		} else {
 			sequence++
 		}
-	case now > g.lastMillis:
+	case now > lastMillis:
 		lastMillis = now
 		sequence = 0
+		overCostActive = false
+		overCostRemaining = g.overCostLimit
 	default:
-		return 0, fmt.Errorf("%w: now=%d last=%d", ErrClockRollback, now, g.lastMillis)
+		if !overCostActive {
+			return 0, fmt.Errorf("%w: now=%d last=%d", ErrClockRollback, now, lastMillis)
+		}
+		if sequence >= MaxSequence {
+			if overCostRemaining > 0 {
+				lastMillis++
+				sequence = 0
+				overCostRemaining--
+			} else {
+				nextMillis := lastMillis + 1
+				if err := g.clock.SleepUntil(ctx, nextMillis); err != nil {
+					return 0, err
+				}
+				now = g.clock.NowMillis()
+				if now <= lastMillis {
+					return 0, fmt.Errorf("%w: now=%d last=%d", ErrClockRollback, now, lastMillis)
+				}
+				lastMillis = now
+				sequence = 0
+				overCostActive = false
+				overCostRemaining = g.overCostLimit
+			}
+		} else {
+			sequence++
+		}
 	}
 	if lastMillis == g.epochMillis && g.nodeCode == 0 && sequence == 0 {
 		sequence = 1
@@ -292,6 +346,8 @@ func (g *Generator) next(ctx context.Context, floorMillis int64, fenceMillis int
 	}
 	g.lastMillis = lastMillis
 	g.sequence = sequence
+	g.overCostActive = overCostActive
+	g.overCostRemaining = overCostRemaining
 	return id, nil
 }
 
