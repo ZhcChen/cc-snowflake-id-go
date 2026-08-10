@@ -146,6 +146,10 @@ type Config struct {
 	// OverCostCount 是 seq 溢出时允许时间戳虚拟前移的最大毫秒数（over cost）；
 	// 为 0 时保持原行为，等待 wall clock 进入下一毫秒。
 	OverCostCount int64
+	// AllowInMemoryOverCost 表示调用方接受 over cost 状态仅保存在内存中；
+	// 跨重启安全需由调用方或 durable generation fence（例如 lease）保障。
+	// 纯 generator 使用 OverCostCount > 0 时必须为 true。
+	AllowInMemoryOverCost bool
 }
 
 // Generator 是单进程内使用的雪花 ID 生成器。
@@ -188,6 +192,9 @@ func NewGenerator(cfg Config, clock Clock) (*Generator, error) {
 	}
 	if cfg.OverCostCount < 0 {
 		return nil, fmt.Errorf("%w: over cost count must be non-negative", ErrInvalidGeneratorConfig)
+	}
+	if cfg.OverCostCount > 0 && !cfg.AllowInMemoryOverCost {
+		return nil, fmt.Errorf("%w: over cost requires AllowInMemoryOverCost", ErrInvalidGeneratorConfig)
 	}
 	smallRollbackWait := cfg.SmallRollbackWait
 	if smallRollbackWait == 0 {

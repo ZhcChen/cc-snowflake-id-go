@@ -479,6 +479,7 @@ type LeasedGeneratorConfig struct {
 	SmallRollbackWait time.Duration
 	// OverCostCount 是 seq 溢出时允许时间戳虚拟前移的最大毫秒数（over cost）；
 	// 为 0 时保持原行为，等待 wall clock 进入下一毫秒。
+	// lease 通过持久化 generation fence 提供跨重启安全，无需额外声明内存态许可。
 	OverCostCount int64
 	// LeaseWindow 是单次租约保留时长。
 	LeaseWindow time.Duration
@@ -546,6 +547,8 @@ func NewLeasedGenerator(store LeaseStore, clock sf.Clock, cfg LeasedGeneratorCon
 		EpochMillis:       cfg.EpochMillis,
 		SmallRollbackWait: cfg.SmallRollbackWait,
 		OverCostCount:     cfg.OverCostCount,
+		// lease 通过持久化 generation fence 提供跨重启安全边界。
+		AllowInMemoryOverCost: true,
 	}, clock)
 	if err != nil {
 		return nil, err

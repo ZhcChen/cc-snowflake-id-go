@@ -9,9 +9,10 @@ import (
 func TestGeneratorOverCostAdvancesWithoutSleeping(t *testing.T) {
 	clock := &fakeClock{now: 2_000}
 	g, err := NewGenerator(Config{
-		NodeID:        1,
-		EpochMillis:   1_000,
-		OverCostCount: 3,
+		NodeID:                1,
+		EpochMillis:           1_000,
+		OverCostCount:         3,
+		AllowInMemoryOverCost: true,
 	}, clock)
 	if err != nil {
 		t.Fatalf("NewGenerator() error = %v", err)
@@ -40,9 +41,10 @@ func TestGeneratorOverCostAdvancesWithoutSleeping(t *testing.T) {
 func TestGeneratorOverCostConsumesLimitThenWaits(t *testing.T) {
 	clock := &fakeClock{now: 2_000}
 	g, err := NewGenerator(Config{
-		NodeID:        1,
-		EpochMillis:   1_000,
-		OverCostCount: 2,
+		NodeID:                1,
+		EpochMillis:           1_000,
+		OverCostCount:         2,
+		AllowInMemoryOverCost: true,
 	}, clock)
 	if err != nil {
 		t.Fatalf("NewGenerator() error = %v", err)
@@ -76,9 +78,10 @@ func TestGeneratorOverCostConsumesLimitThenWaits(t *testing.T) {
 func TestGeneratorOverCostKeepsWorkingWhenWallClockIsBehind(t *testing.T) {
 	clock := &fakeClock{now: 2_000}
 	g, err := NewGenerator(Config{
-		NodeID:        1,
-		EpochMillis:   1_000,
-		OverCostCount: 5,
+		NodeID:                1,
+		EpochMillis:           1_000,
+		OverCostCount:         5,
+		AllowInMemoryOverCost: true,
 	}, clock)
 	if err != nil {
 		t.Fatalf("NewGenerator() error = %v", err)
@@ -103,9 +106,10 @@ func TestGeneratorOverCostKeepsWorkingWhenWallClockIsBehind(t *testing.T) {
 func TestGeneratorOverCostResetsWhenWallClockCatchesUp(t *testing.T) {
 	clock := &fakeClock{now: 2_000}
 	g, err := NewGenerator(Config{
-		NodeID:        1,
-		EpochMillis:   1_000,
-		OverCostCount: 3,
+		NodeID:                1,
+		EpochMillis:           1_000,
+		OverCostCount:         3,
+		AllowInMemoryOverCost: true,
 	}, clock)
 	if err != nil {
 		t.Fatalf("NewGenerator() error = %v", err)
@@ -145,9 +149,10 @@ func TestGeneratorOverCostWaitPropagatesClockFailure(t *testing.T) {
 	sleepErr := errors.New("clock unavailable")
 	clock := &fakeClock{now: 2_000, err: sleepErr}
 	g, err := NewGenerator(Config{
-		NodeID:        1,
-		EpochMillis:   1_000,
-		OverCostCount: 1,
+		NodeID:                1,
+		EpochMillis:           1_000,
+		OverCostCount:         1,
+		AllowInMemoryOverCost: true,
 	}, clock)
 	if err != nil {
 		t.Fatalf("NewGenerator() error = %v", err)
@@ -174,9 +179,10 @@ func TestGeneratorOverCostWaitPropagatesClockFailure(t *testing.T) {
 func TestGeneratorOverCostWaitRejectsStalledClock(t *testing.T) {
 	clock := &stalledRollbackClock{now: 2_000}
 	g, err := NewGenerator(Config{
-		NodeID:        1,
-		EpochMillis:   1_000,
-		OverCostCount: 1,
+		NodeID:                1,
+		EpochMillis:           1_000,
+		OverCostCount:         1,
+		AllowInMemoryOverCost: true,
 	}, clock)
 	if err != nil {
 		t.Fatalf("NewGenerator() error = %v", err)
@@ -241,9 +247,10 @@ func TestGeneratorDefaultOverflowWaitRejectsStalledClock(t *testing.T) {
 func TestGeneratorOverCostNextWithinStopsAtFence(t *testing.T) {
 	clock := &fakeClock{now: 2_000}
 	g, err := NewGenerator(Config{
-		NodeID:        1,
-		EpochMillis:   1_000,
-		OverCostCount: 3,
+		NodeID:                1,
+		EpochMillis:           1_000,
+		OverCostCount:         3,
+		AllowInMemoryOverCost: true,
 	}, clock)
 	if err != nil {
 		t.Fatalf("NewGenerator() error = %v", err)
@@ -274,6 +281,16 @@ func TestGeneratorRejectsNegativeOverCostCount(t *testing.T) {
 	_, err := NewGenerator(Config{
 		NodeID:        1,
 		OverCostCount: -1,
+	}, nil)
+	if !errors.Is(err, ErrInvalidGeneratorConfig) {
+		t.Fatalf("NewGenerator() error = %v, want ErrInvalidGeneratorConfig", err)
+	}
+}
+
+func TestGeneratorRejectsOverCostWithoutExplicitInMemoryOptIn(t *testing.T) {
+	_, err := NewGenerator(Config{
+		NodeID:        1,
+		OverCostCount: 1,
 	}, nil)
 	if !errors.Is(err, ErrInvalidGeneratorConfig) {
 		t.Fatalf("NewGenerator() error = %v, want ErrInvalidGeneratorConfig", err)

@@ -28,6 +28,11 @@
 `LeasedGeneratorConfig.OverCostCount`）启用有界时间戳虚拟前移，思路与
 yitter/IdGenerator 的漂移算法一致：
 
+- 纯 `generator` 使用 over cost 时必须同时设置 `AllowInMemoryOverCost: true`，
+  表示接受 over cost 状态仅保存在内存、跨重启安全由调用方自行负责；否则
+  `NewGenerator` 会返回 `ErrInvalidGeneratorConfig`；
+- `lease` 不需要额外声明，`LeasedGenerator` 内部已通过持久化 generation fence
+  提供跨重启安全边界；
 - `sequence` 溢出时时间戳虚拟前移 1ms，不等待 wall clock，最多累计前移
   `OverCostCount` ms；
 - 超过上限后仍等待 wall clock 追平并推进，避免时间戳无限超前；
