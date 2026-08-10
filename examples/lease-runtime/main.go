@@ -54,7 +54,10 @@ func main() {
 		LeaseAcquireTimeout:   3 * time.Second,
 		LeaseOperationTimeout: time.Second,
 		LeaseRefreshInterval:  3 * time.Second,
-		Observer:              telemetry,
+		// 有界时间戳虚拟前移上限：seq 溢出时最多提前 2000ms 发号。
+		// 小于 FenceWindow，避免频繁触达 generation fence。
+		OverCostCount: 2000,
+		Observer:      telemetry,
 	})
 	if err != nil {
 		log.Fatalf("create leased generator: %v", err)

@@ -11,6 +11,7 @@
 - 获取节点租约
 - 启动后台 refresh runtime
 - 在租约保护下生成雪花 ID
+- 启用有界时间戳虚拟前移（`OverCostCount: 2000`）
 - 读取 `Snapshot` 检查当前状态
 
 ## 运行前提
@@ -30,6 +31,18 @@
 - PostgreSQL 连接参数是否正确
 - 租约表结构是否满足 `lease` 包要求
 - `Acquire -> StartRuntime -> Next -> Snapshot -> Stop` 这一条最小生命周期链路是否成立
+- over cost 配置可以正常通过 `LeasedGenerator` 接入，并由持久化 fence 兜底
+
+## demo 的 lease 参数
+
+- `LeaseWindow: 10s`：单次 PG 租约时长
+- `FenceWindow: 10s`：generation fence 未来窗口
+- `LeaseRefreshInterval: 3s`：后台续约间隔
+- `LeaseOperationTimeout: 1s`：单次 PG 操作超时
+- `OverCostCount: 2000`：seq 溢出时最多虚拟前移 2000ms
+
+`OverCostCount` 小于 `FenceWindow`，因此虚拟时间触达 fence 时可以由
+`LeasedGenerator` 按需刷新后继续，不会把 fence 窗口耗尽。
 
 ## 接入业务项目时通常要替换的部分
 
