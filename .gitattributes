@@ -1,0 +1,3 @@
+# 固定模块内文本文件行尾，避免 Go module zip 依赖作者本机全局 Git 属性。
+* text=auto
+*.ps1 text eol=lf
