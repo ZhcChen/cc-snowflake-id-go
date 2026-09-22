@@ -44,6 +44,8 @@
 - 快速接入：[docs/guides/getting-started.md](docs/guides/getting-started.md)
 - `generator` demo 说明：[docs/guides/generator-basic-demo.md](docs/guides/generator-basic-demo.md)
 - `lease` demo 说明：[docs/guides/lease-runtime-demo.md](docs/guides/lease-runtime-demo.md)
+- 生产级接入参考：[examples/production-runtime/main.go](examples/production-runtime/main.go)
+- 生产级接入参考说明：[docs/guides/production-runtime-demo.md](docs/guides/production-runtime-demo.md)
 - 测试与 CI：[docs/testing/ci-and-tests.md](docs/testing/ci-and-tests.md)
 - 注释规范：[docs/standards/code-commenting.md](docs/standards/code-commenting.md)
 

@@ -7,6 +7,7 @@
 - [快速接入](guides/getting-started.md)
 - [单进程 `generator` demo 说明](guides/generator-basic-demo.md)
 - [PostgreSQL 租约 `lease` demo 说明](guides/lease-runtime-demo.md)
+- [生产级接入参考说明](guides/production-runtime-demo.md)
 
 ## 工程
 
@@ -18,3 +19,5 @@
 - [examples/generator-basic/main.go](../examples/generator-basic/main.go)
 - [examples/lease-runtime/main.go](../examples/lease-runtime/main.go)
 - [examples/lease-runtime/schema.sql](../examples/lease-runtime/schema.sql)
+- [examples/production-runtime/main.go](../examples/production-runtime/main.go)
+- [examples/production-runtime/schema.sql](../examples/production-runtime/schema.sql)

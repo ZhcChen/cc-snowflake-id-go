@@ -21,6 +21,9 @@
 3. 把 demo 中的配置项替换成业务项目自己的 `node_id`、数据库连接池和生命周期管理方式。
 4. 接入完成后，按 [测试与 CI](../testing/ci-and-tests.md) 执行本地验证。
 
+如果需要参考长期运行服务的完整接线（runtime 监督、readiness、重建和信号退出），请运行
+[生产级接入参考](production-runtime-demo.md)。
+
 ## 高并发发号参数
 
 默认情况下，同一毫秒内 `sequence` 用满后会等待 wall clock 进入下一毫秒再继续发号。
