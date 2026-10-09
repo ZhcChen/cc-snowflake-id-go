@@ -1021,6 +1021,7 @@ func TestLeasedGeneratorStopsWhenFenceExtensionRefreshFails(t *testing.T) {
 
 type fakeLeaseDB struct {
 	row       pgx.Row
+	queryRows []pgx.Row
 	querySQL  string
 	queryArgs []any
 	execSQL   string
@@ -1030,6 +1031,11 @@ type fakeLeaseDB struct {
 func (db *fakeLeaseDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	db.querySQL = sql
 	db.queryArgs = args
+	if len(db.queryRows) > 0 {
+		row := db.queryRows[0]
+		db.queryRows = db.queryRows[1:]
+		return row
+	}
 	return db.row
 }
 
@@ -1110,6 +1116,32 @@ func TestPGLeaseStoreTryAcquireNoRowsRetries(t *testing.T) {
 	}
 	if state.NodeID != 7 || state.DatabaseNowMillis != 2_000 || state.GenerationFenceMillis != 2_005 {
 		t.Fatalf("state = %+v, want retry marker", state)
+	}
+}
+
+func TestPGLeaseStoreTryAcquirePropagatesFallbackReadError(t *testing.T) {
+	readErr := errors.New("fallback lease read failed")
+	db := &fakeLeaseDB{queryRows: []pgx.Row{
+		fakeLeaseRow{scan: func(dest ...any) error {
+			*(dest[0].(*bool)) = false
+			*(dest[1].(*int)) = 7
+			*(dest[2].(*string)) = ""
+			*(dest[3].(*int64)) = 0
+			*(dest[4].(*int64)) = 0
+			*(dest[5].(*int64)) = 2_000
+			*(dest[6].(*string)) = "retry"
+			return nil
+		}},
+		fakeLeaseRow{scan: func(...any) error { return readErr }},
+	}}
+	store, err := NewPGLeaseStore(db)
+	if err != nil {
+		t.Fatalf("NewPGLeaseStore() error = %v", err)
+	}
+
+	_, acquired, err := store.TryAcquire(context.Background(), 7, "api:host:1:abc", 2_000, 5, 2_005, 1_000)
+	if acquired || !errors.Is(err, readErr) {
+		t.Fatalf("TryAcquire() acquired=%v error=%v, want false and fallback read error", acquired, err)
 	}
 }
 

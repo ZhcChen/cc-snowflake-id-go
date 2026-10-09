@@ -15,6 +15,82 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+func TestPGLeaseStoreConcurrentAcquireReturnsWinnerStateIntegration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	poolA, poolB := newIntegrationLeasePools(t)
+	tx, err := poolA.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin winner transaction: %v", err)
+	}
+	defer tx.Rollback(context.Background())
+
+	storeA, err := NewPGLeaseStore(tx)
+	if err != nil {
+		t.Fatalf("NewPGLeaseStore() for winner transaction: %v", err)
+	}
+	storeB := mustPGLeaseStore(t, poolB)
+	localNowMillis := time.Now().UnixMilli()
+	const (
+		nodeID             = 12
+		leaseWindowMillis  = int64(10_000)
+		maxClockSkewMillis = int64(1_000)
+	)
+	winnerFenceMillis := localNowMillis + leaseWindowMillis
+	winnerState, acquired, err := storeA.TryAcquire(
+		ctx,
+		nodeID,
+		"owner-a",
+		localNowMillis,
+		leaseWindowMillis,
+		winnerFenceMillis,
+		maxClockSkewMillis,
+	)
+	if err != nil || !acquired {
+		t.Fatalf("winner setup state=%+v acquired=%v error=%v", winnerState, acquired, err)
+	}
+	var winnerPID int32
+	if err := tx.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&winnerPID); err != nil {
+		t.Fatalf("read winner backend PID: %v", err)
+	}
+
+	type acquireResult struct {
+		state    LeaseState
+		acquired bool
+		err      error
+	}
+	resultCh := make(chan acquireResult, 1)
+	go func() {
+		state, acquired, err := storeB.TryAcquire(
+			ctx,
+			nodeID,
+			"owner-b",
+			localNowMillis,
+			leaseWindowMillis,
+			localNowMillis+leaseWindowMillis,
+			maxClockSkewMillis,
+		)
+		resultCh <- acquireResult{state: state, acquired: acquired, err: err}
+	}()
+	waitForLeaseConflictWait(t, poolA, winnerPID)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit winner transaction: %v", err)
+	}
+
+	loser := <-resultCh
+	if loser.err != nil {
+		t.Fatalf("loser TryAcquire() error = %v", loser.err)
+	}
+	if loser.acquired {
+		t.Fatalf("loser acquired = true, want false; state=%+v", loser.state)
+	}
+	if loser.state.OwnerID != "owner-a" ||
+		loser.state.ReservedUntilMillis != winnerState.ReservedUntilMillis ||
+		loser.state.GenerationFenceMillis != winnerState.GenerationFenceMillis {
+		t.Fatalf("loser state = %+v, want winner state %+v", loser.state, winnerState)
+	}
+}
+
 func TestPGLeaseStoreConcurrentAcquireAndFenceTakeoverIntegration(t *testing.T) {
 	ctx := context.Background()
 	poolA, poolB := newIntegrationLeasePools(t)
@@ -329,6 +405,37 @@ func mustPGLeaseStore(t *testing.T, pool *pgxpool.Pool) *PGLeaseStore {
 		t.Fatalf("NewPGLeaseStore() error = %v", err)
 	}
 	return store
+}
+
+func waitForLeaseConflictWait(t *testing.T, pool *pgxpool.Pool, blockerPID int32) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var blocked bool
+		err := pool.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM pg_stat_activity AS activity
+    WHERE activity.datname = current_database()
+      AND activity.wait_event_type = 'Lock'
+      AND activity.query LIKE '%INSERT INTO id_generator_node_leases%'
+      AND pg_blocking_pids(activity.pid) @> ARRAY[$1::INTEGER]
+)`, blockerPID).Scan(&blocked)
+		if err != nil {
+			t.Fatalf("check lease conflict wait: %v", err)
+		}
+		if blocked {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("loser did not block on winner transaction %d: %v", blockerPID, ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func assertPersistedLeaseOwnerAndBounds(

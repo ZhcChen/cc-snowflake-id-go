@@ -63,7 +63,7 @@ type LeaseState struct {
 
 // LeaseStore 定义租约获取、刷新和释放的持久化接口。
 type LeaseStore interface {
-	// TryAcquire 尝试获取租约，并返回当前租约状态和是否成功。
+	// TryAcquire 尝试获取租约。未获取时返回本次尝试可见的租约状态；若没有可见租约，则返回本次请求的重试边界。
 	TryAcquire(ctx context.Context, nodeID int, ownerID string, localNowMillis int64, leaseWindowMillis int64, generationFenceMillis int64, maxClockSkewMillis int64) (LeaseState, bool, error)
 	// Refresh 延长当前 owner 持有的租约。
 	Refresh(ctx context.Context, nodeID int, ownerID string, localNowMillis int64, leaseWindowMillis int64, generationFenceMillis int64, maxClockSkewMillis int64) (LeaseState, error)
@@ -875,6 +875,26 @@ LIMIT 1`,
 	}
 	if outcome == "clock_skew" {
 		return state, false, clockSkewError(localNowMillis, state.DatabaseNowMillis, maxClockSkewMillis)
+	}
+	if !acquired && state.OwnerID == "" {
+		// PostgreSQL 的 ON CONFLICT 可处理当前语句快照不可见的冲突行。
+		readErr := s.db.QueryRow(ctx, `
+SELECT node_id,
+       owner_id,
+       reserved_until_ms,
+       generation_fence_ms,
+       FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT
+FROM id_generator_node_leases
+WHERE node_id = $1`, nodeID).Scan(
+			&state.NodeID,
+			&state.OwnerID,
+			&state.ReservedUntilMillis,
+			&state.GenerationFenceMillis,
+			&state.DatabaseNowMillis,
+		)
+		if readErr != nil && !errors.Is(readErr, pgx.ErrNoRows) {
+			return LeaseState{}, false, readErr
+		}
 	}
 	return state, acquired, nil
 }
