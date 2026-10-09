@@ -53,7 +53,8 @@ type LeaseState struct {
 	OwnerID string
 	// ReservedUntilMillis 是数据库视角下的租约到期毫秒时间。
 	ReservedUntilMillis int64
-	// DatabaseNowMillis 是本次租约读写时数据库返回的当前毫秒时间。
+	// DatabaseNowMillis 是本次租约操作的数据库时间参考。
+	// PG 获取使用首次裁决语句的采样，补读租约字段不会更换该参考。
 	DatabaseNowMillis int64
 	// GenerationFloorMillis 是当前实例允许发号的时间下界。
 	GenerationFloorMillis int64
@@ -732,12 +733,15 @@ type PGLeaseStore struct {
 }
 
 // LeaseDB 定义 PGLeaseStore 依赖的最小数据库能力。
+// 常规 LeaseManager/LeasedGenerator 应使用自动提交的 pool 或 conn。
+// 显式事务的提交、回滚和序列化失败后的整事务重试由调用方负责。
 type LeaseDB interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 // NewPGLeaseStore 创建一个 PostgreSQL 租约存储实现。
+// 传入 pgx.Tx 时，获取成功仅表示事务内写入成功，提交前不能用于持续发号。
 func NewPGLeaseStore(db LeaseDB) (*PGLeaseStore, error) {
 	if db == nil {
 		return nil, fmt.Errorf("%w: db is required", ErrInvalidLeaseConfig)
@@ -746,6 +750,9 @@ func NewPGLeaseStore(db LeaseDB) (*PGLeaseStore, error) {
 }
 
 // TryAcquire 尝试为指定 node_id 获取租约。
+// 获取失败且无错误时返回本次可见状态；补读无行时允许 OwnerID 为空。
+// READ COMMITTED 下补读使用新语句快照，返回值不保证是原子或最新视图。
+// 更高隔离级别的序列化失败原样返回，存储不重试调用方事务。
 func (s *PGLeaseStore) TryAcquire(
 	ctx context.Context,
 	nodeID int,
@@ -878,19 +885,18 @@ LIMIT 1`,
 	}
 	if !acquired && state.OwnerID == "" {
 		// PostgreSQL 的 ON CONFLICT 可处理当前语句快照不可见的冲突行。
+		// 保留首次时间参考，避免 manager 扣整次请求耗时时重复扣除冲突等待。
 		readErr := s.db.QueryRow(ctx, `
 SELECT node_id,
        owner_id,
        reserved_until_ms,
-       generation_fence_ms,
-       FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT
+       generation_fence_ms
 FROM id_generator_node_leases
 WHERE node_id = $1`, nodeID).Scan(
 			&state.NodeID,
 			&state.OwnerID,
 			&state.ReservedUntilMillis,
 			&state.GenerationFenceMillis,
-			&state.DatabaseNowMillis,
 		)
 		if readErr != nil && !errors.Is(readErr, pgx.ErrNoRows) {
 			return LeaseState{}, false, readErr

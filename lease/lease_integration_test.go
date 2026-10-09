@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -88,6 +89,107 @@ func TestPGLeaseStoreConcurrentAcquireReturnsWinnerStateIntegration(t *testing.T
 		loser.state.ReservedUntilMillis != winnerState.ReservedUntilMillis ||
 		loser.state.GenerationFenceMillis != winnerState.GenerationFenceMillis {
 		t.Fatalf("loser state = %+v, want winner state %+v", loser.state, winnerState)
+	}
+}
+
+func TestPGLeaseStoreConcurrentAcquireTransactionIntegration(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		isolation pgx.TxIsoLevel
+		rollback  bool
+	}{
+		{name: "read_committed", isolation: pgx.ReadCommitted},
+		{name: "repeatable_read", isolation: pgx.RepeatableRead},
+		{name: "serializable", isolation: pgx.Serializable},
+		{name: "winner_rollback", rollback: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			poolA, poolB := newIntegrationLeasePools(t)
+			winnerTx, err := poolA.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer winnerTx.Rollback(context.Background())
+			winnerStore, err := NewPGLeaseStore(winnerTx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UnixMilli()
+			winner, acquired, err := winnerStore.TryAcquire(ctx, 12, "owner-a", now, 10_000, now+10_000, 1_000)
+			if err != nil || !acquired {
+				t.Fatalf("winner: acquired=%v err=%v", acquired, err)
+			}
+			var pid int32
+			if err := winnerTx.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid); err != nil {
+				t.Fatal(err)
+			}
+			var contenderDB LeaseDB = poolB
+			var contenderTx pgx.Tx
+			if tc.isolation != "" {
+				contenderTx, err = poolB.BeginTx(ctx, pgx.TxOptions{IsoLevel: tc.isolation})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer contenderTx.Rollback(context.Background())
+				contenderDB = contenderTx
+			}
+			contenderStore, err := NewPGLeaseStore(contenderDB)
+			if err != nil {
+				t.Fatal(err)
+			}
+			type result struct {
+				state    LeaseState
+				acquired bool
+				err      error
+			}
+			results := make(chan result, 1)
+			go func() {
+				state, acquired, err := contenderStore.TryAcquire(ctx, 12, "owner-b", now, 10_000, now+10_000, 1_000)
+				results <- result{state, acquired, err}
+			}()
+			waitForLeaseConflictWait(t, poolA, pid)
+			if tc.rollback {
+				err = winnerTx.Rollback(ctx)
+			} else {
+				err = winnerTx.Commit(ctx)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var contender result
+			select {
+			case contender = <-results:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if tc.isolation == pgx.RepeatableRead || tc.isolation == pgx.Serializable {
+				var pgErr *pgconn.PgError
+				if contender.acquired || !errors.As(contender.err, &pgErr) || pgErr.Code != "40001" {
+					t.Fatalf("want serialization failure, got acquired=%v state=%+v err=%v", contender.acquired, contender.state, contender.err)
+				}
+				assertPersistedLeaseOwnerAndBounds(t, poolA, 12, "owner-a", winner.ReservedUntilMillis, winner.GenerationFenceMillis)
+				return
+			}
+			if contender.err != nil {
+				t.Fatal(contender.err)
+			}
+			if tc.rollback {
+				if !contender.acquired || contender.state.NodeID != 12 || contender.state.OwnerID != "owner-b" {
+					t.Fatalf("rollback contender: %+v", contender)
+				}
+				assertPersistedLeaseOwnerAndBounds(t, poolA, 12, "owner-b", contender.state.ReservedUntilMillis, contender.state.GenerationFenceMillis)
+			} else {
+				if contender.acquired || contender.state.NodeID != 12 || contender.state.OwnerID != "owner-a" || contender.state.ReservedUntilMillis != winner.ReservedUntilMillis || contender.state.GenerationFenceMillis != winner.GenerationFenceMillis {
+					t.Fatalf("committed winner mismatch: %+v winner=%+v", contender, winner)
+				}
+				if err := contenderTx.Commit(ctx); err != nil {
+					t.Fatal(err)
+				}
+				assertPersistedLeaseOwnerAndBounds(t, poolA, 12, "owner-a", winner.ReservedUntilMillis, winner.GenerationFenceMillis)
+			}
+		})
 	}
 }
 
@@ -411,11 +513,17 @@ func waitForLeaseConflictWait(t *testing.T, pool *pgxpool.Pool, blockerPID int32
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	// winner 占用池连接时仍可观察锁，支持 pool_max_conns=1。
+	observer, err := pgx.ConnectConfig(ctx, pool.Config().ConnConfig.Copy())
+	if err != nil {
+		t.Fatalf("connect lease conflict observer: %v", err)
+	}
+	defer observer.Close(context.Background())
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		var blocked bool
-		err := pool.QueryRow(ctx, `
+		err := observer.QueryRow(ctx, `
 SELECT EXISTS (
     SELECT 1
     FROM pg_stat_activity AS activity

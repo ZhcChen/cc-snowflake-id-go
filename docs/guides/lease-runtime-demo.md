@@ -54,6 +54,16 @@
 
 ## 相关说明
 
+### 数据库 executor 与事务边界
+
+常规 `LeaseManager` / `LeasedGenerator` 接入沿用 demo 的自动提交连接池；独立 `pgx.Conn` 也应在自动提交模式使用。`LeaseDB` 接受 `pgx.Tx`，但不接管调用方事务生命周期。
+
+- 默认自动提交和显式 READ COMMITTED 下，竞争失败后的补读使用新语句快照，可以读取刚提交的胜者。返回状态只代表本次可见视图，不保证原子或返回时仍最新；无可见行时允许空 `OwnerID`，同时 `acquired=false`，manager 继续按边界重试。
+- REPEATABLE READ / SERIALIZABLE 并发冲突可能返回 PostgreSQL 序列化错误（SQLSTATE `40001`）。store 原样返回；manager 包装存储错误后停止获取，不自动重试外层事务。调用方负责回滚并重试整个事务。
+- 事务中 `acquired=true` 仅表示事务内写入成功，提交前不能用于持续发号；回滚会撤销租约写入，竞争方可能随即获取节点。长期事务也会阻塞竞争获取，不适合常规运行时租约续期。
+
+`DatabaseNowMillis` 是首次裁决语句采样的数据库时间参考。补读只更新租约字段，保留该参考，以配合 manager 的整次请求耗时扣减；这些字段不保证同一时刻采样。该策略减少重复扣时产生的额外请求，数据库 owner、过期、时钟偏差和 generation fence 条件仍决定是否能获取。
+
 - 如果只是单实例服务，不需要这个 demo，直接使用 `generator`
 - 本 demo 是最小接入链路，不等于生产环境全部配置
 - 本地与 CI 的测试入口见 [测试与 CI](../testing/ci-and-tests.md)

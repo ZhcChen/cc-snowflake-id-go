@@ -1098,6 +1098,99 @@ func TestPGLeaseStoreTryAcquireMapsRow(t *testing.T) {
 	}
 }
 
+func TestPGLeaseStoreTryAcquireFallbackState(t *testing.T) {
+	for _, noRows := range []bool{false, true} {
+		name := "success"
+		if noRows {
+			name = "no_rows"
+		}
+		t.Run(name, func(t *testing.T) {
+			db := &fakeLeaseDB{queryRows: []pgx.Row{
+				fakeLeaseRow{scan: func(dest ...any) error {
+					*(dest[0].(*bool)) = false
+					*(dest[1].(*int)) = 7
+					*(dest[5].(*int64)) = 2_000
+					*(dest[6].(*string)) = "retry"
+					return nil
+				}},
+				fakeLeaseRow{scan: func(dest ...any) error {
+					if noRows {
+						return pgx.ErrNoRows
+					}
+					*(dest[0].(*int)) = 7
+					*(dest[1].(*string)) = "owner-a"
+					*(dest[2].(*int64)) = 3_000
+					*(dest[3].(*int64)) = 3_200
+					// 旧实现还会扫描补读时钟；修复后仅补读租约字段。
+					if len(dest) > 4 {
+						*(dest[4].(*int64)) = 2_200
+					}
+					return nil
+				}},
+			}}
+			store, err := NewPGLeaseStore(db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, acquired, err := store.TryAcquire(context.Background(), 7, "owner-b", 2_000, 1_000, 3_000, 1_000)
+			want := LeaseState{NodeID: 7, DatabaseNowMillis: 2_000}
+			if !noRows {
+				want.OwnerID = "owner-a"
+				want.ReservedUntilMillis = 3_000
+				want.GenerationFenceMillis = 3_200
+			}
+			if err != nil || acquired || state != want {
+				t.Fatalf("state=%+v acquired=%v err=%v, want %+v false nil", state, acquired, err, want)
+			}
+			if len(db.queryArgs) != 1 || db.queryArgs[0] != 7 {
+				t.Fatalf("readback node args=%v", db.queryArgs)
+			}
+		})
+	}
+}
+
+func TestLeaseManagerFallbackDoesNotDeductConflictWaitTwice(t *testing.T) {
+	clock := &fakeClock{now: 2_000}
+	stop := errors.New("stop after observing first retry")
+	db := &fakeLeaseDB{queryRows: []pgx.Row{
+		fakeLeaseRow{scan: func(dest ...any) error {
+			clock.now += 200
+			clock.monotonic += 200
+			*(dest[0].(*bool)) = false
+			*(dest[1].(*int)) = 7
+			*(dest[5].(*int64)) = 2_000
+			*(dest[6].(*string)) = "retry"
+			return nil
+		}},
+		fakeLeaseRow{scan: func(dest ...any) error {
+			*(dest[0].(*int)) = 7
+			*(dest[1].(*string)) = "owner-a"
+			*(dest[2].(*int64)) = 3_000
+			*(dest[3].(*int64)) = 3_000
+			if len(dest) > 4 {
+				*(dest[4].(*int64)) = 2_200
+			}
+			return nil
+		}},
+		fakeLeaseRow{scan: func(...any) error { return stop }},
+	}}
+	store, err := NewPGLeaseStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewLeaseManager(store, clock, LeaseManagerConfig{NodeID: 7, OwnerID: "owner-b", LeaseWindow: time.Second, AcquireTimeout: 2 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = manager.Acquire(context.Background())
+	if !errors.Is(err, stop) {
+		t.Fatalf("unexpected stop: %v", err)
+	}
+	if len(clock.durationSleeps) != 1 || clock.durationSleeps[0] != 800*time.Millisecond {
+		t.Fatalf("sleeps=%v, want [800ms] after 200ms conflict wait", clock.durationSleeps)
+	}
+}
+
 func TestPGLeaseStoreTryAcquireNoRowsRetries(t *testing.T) {
 	db := &fakeLeaseDB{row: fakeLeaseRow{scan: func(dest ...any) error {
 		return pgx.ErrNoRows
