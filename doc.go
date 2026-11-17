@@ -10,7 +10,5 @@
 // 1. examples/generator-basic
 // 2. examples/lease-runtime
 //
-// 更完整的使用与测试说明见 README.md 和 docs/ 目录。
-//
-// 注释规范见 docs/standards/code-commenting.md。
+// 租约表参考结构见 examples/lease-runtime/schema.sql，生产级接入见 examples/production-runtime。
 package idgen

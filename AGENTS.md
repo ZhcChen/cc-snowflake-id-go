@@ -1,53 +1,46 @@
-# CE 项目提示词模板
+## 项目说明
 
-> 说明：这是 **Compound Engineering (CE)** 在 Codex CLI 下的项目级 `AGENTS.md` 模板。
-> 当某个项目希望以 CE 作为主要 AI 工作架构时，将本文件复制到该项目根目录并重命名为 `AGENTS.md`。
-> 如果项目已经有自己的 `AGENTS.md`，请将其中与 CE 相关的规则合并进去，而不是盲目覆盖。
+- 本仓库是公开的 Go 库 `github.com/ZhcChen/cc-snowflake-id-go`：可复用的雪花 ID。
+  - `generator`：进程内雪花 ID 生成、解码与时钟回退保护。
+  - `lease`：PostgreSQL 租约、后台续约运行时、遥测与状态快照，供多实例安全发号。
+  - 根包 `idgen` 只有包文档，不导出兼容 facade；调用方直接依赖子包。
+- 库内不得出现任何具体公司、项目或业务名称，也不得依赖使用方的代码。
 
-## 工作模式
-- 本项目默认启用 **Compound Engineering (CE)** 作为主要 AI 工作架构。
-- 在没有用户明确要求切换流程的情况下，优先使用 CE 的工作流，避免混入其他并行流程。
-- **同一项任务默认只采用一套主工作流。** 若当前任务已明确选择 CE，就不要再混入其他设计/计划/执行流程。
-- 若用户明确指定使用其他流程、已有项目规范与 CE 冲突，或当前任务只是一次小型查询/解释，则以用户指令和项目现有规范为准。
+## 文档位置
 
-## CE 默认工作流
-按任务类型优先采用以下顺序：
+- 设计、计划、规格、复核、运行手册全部放 Obsidian `我的/项目/cc-snowflake-id-go/`（`README.md` 为索引）。仓库不新增 README 或 docs，只保留本文件、`doc.go` 包文档、代码注释与 `examples/`（对外说明以 pkg.go.dev 显示的包文档为准）。
+- 代码注释规范见 Obsidian《代码注释规范》；测试入口与 CI 口径见《测试与 CI》。
+- 修改公共 API、序列化行为、租约或时钟语义前，先读相关文档并同步更新；设计与代码不一致时先讨论再改。
 
-1. **需求不清、范围未定、要先讨论方向**
-   - 优先使用 `ce:brainstorm`
-   - 产出写入 `docs/brainstorms/`
+## 目录
 
-2. **需求已清晰，需要技术方案或拆解实施计划**
-   - 优先使用 `ce:plan`
-   - 产出写入 `docs/plans/`
+- `generator/`、`lease/`：两个子包。
+- `examples/`：可运行示例（`generator-basic`、`lease-runtime`、`production-runtime`），示例里的 `schema.sql` 是租约表参考结构。
+- `scripts/test/`：`unit.ps1`、`race.ps1`、`integration.ps1`，CI 调用。
+- `.gitattributes` 固定文本行尾，保证 Go module zip 跨平台可复现，不要删除。
 
-3. **进入执行阶段，需要按计划落地**
-   - 优先使用 `ce:work`
-   - 若明确需要实验性的外部委派模式，可使用 `ce:work-beta`
+## 代码规则
 
-4. **代码改动完成，需要审查质量、风险与规范**
-   - 优先使用 `ce:review`
+- 注释、错误说明使用简体中文；标识符使用英文。导出标识符必须有文档注释。
+- 修改公共 API、序列化行为、PostgreSQL 租约、时钟或过期语义、generation fence 时，写明兼容性与边界，并按风险组合单元、race 与 PostgreSQL 集成测试。
+- 公共 API 遵循语义化版本：v0 阶段允许不兼容变更，但须在提交说明中写明。
+- 不为无关目的重构；不修改 Go module cache 或调用方项目来规避本仓库问题。
 
-5. **问题解决后，需要沉淀经验与复用知识**
-   - 优先使用 `ce:compound`
-   - 历史知识漂移或过期时使用 `ce:compound-refresh`
-   - 产出写入 `docs/solutions/`
+## Git
 
-## 产物约定
-- 需求/产品定义：`docs/brainstorms/`
-- 技术计划：`docs/plans/`
-- 解决方案/经验沉淀：`docs/solutions/`
-- CE 运行期中间产物：`.context/compound-engineering/`
+- 任务开始先执行 `git status --short --branch`，保留已有改动。
+- 默认分支 `main`；较大改动用 `dev/<主题>` 或 `fix/<主题>` 分支，完成后合入 `main`。
+- 任务完成并通过相应检查后，精确暂存相关路径并提交；提交说明首行为“类型: 中文说明”，类型取 feat、fix、docs、chore、refactor、test、perf、build、ci、style、revert。
+- 对话结束前，将已完成的提交推送到当前分支对应远端。
+- 不使用 `--no-verify`，不做 `reset --hard`、`clean`、强制推送。
 
-除非项目已有明确不同约定，否则遵守以上目录布局。
+## 开发与验证
 
-## 执行规则
-- 在 CE 工作流中，优先保证：**先澄清，再规划，再执行，再审查，再沉淀**。
-- 对于跨文件、跨模块、带有不确定性的任务，不要跳过 `ce:brainstorm` 或 `ce:plan` 直接编码，除非用户明确要求。
-- 所有文档中的路径引用都使用**仓库相对路径**，不要使用绝对路径。
-- 当任务已经有现成计划文件或 brainstorm 文档时，优先复用和续写，不要重复生成平行文档。
-- 若项目中同时存在人工规范、项目 `AGENTS.md`、其他 AI 说明文件，则遵循：
-  1. 用户明确指令
-  2. 当前项目根目录下的规范文件
-  3. CE 工作流约定
-  4. 全局默认行为
+- 本机只做编辑、格式化和纯文本检查；不在本机执行 `go build`、`go test`、`go mod tidy`。
+- 测试在 GitHub Actions 运行（`.github/workflows/test.yml`：unit、race、integration（PostgreSQL 服务容器））；推送后用 `gh run watch` / `gh run view --log-failed` 查看结果。
+- 汇报验证结果时区分通过、失败、跳过、未覆盖；没跑过的写“未验证”。
+
+## 发布
+
+- 用 Git 标签发布（`vX.Y.Z`），打标签前 CI 必须全绿；标签一经推送不得删除或移动，有问题发新版本。
+- 发布的提交应在 `main` 上。
