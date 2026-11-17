@@ -1,6 +1,5 @@
 # cc-snowflake-id-go
 
-[![test](https://github.com/ZhcChen/cc-snowflake-id-go/actions/workflows/test.yml/badge.svg)](https://github.com/ZhcChen/cc-snowflake-id-go/actions/workflows/test.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/ZhcChen/cc-snowflake-id-go.svg)](https://pkg.go.dev/github.com/ZhcChen/cc-snowflake-id-go)
 
 可复用的 Go 雪花 ID 库：单进程生成，以及基于 PostgreSQL 租约的多实例安全发号。
