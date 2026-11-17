@@ -8,7 +8,7 @@
 
 ## 文档位置
 
-- 设计、计划、规格、复核、运行手册全部放 Obsidian `我的/项目/cc-snowflake-id-go/`（`README.md` 为索引）。仓库不新增 README 或 docs，只保留本文件、`doc.go` 包文档、代码注释与 `examples/`（对外说明以 pkg.go.dev 显示的包文档为准）。
+- 设计、计划、规格、复核、运行手册全部放 Obsidian `我的/项目/cc-snowflake-id-go/`（`README.md` 为索引）。仓库只有一份面向 GitHub 访客的简短 `README.md`（定位、安装、包一览，不写设计与用法细节），不新增 docs；其余只保留本文件、`doc.go` 包文档、代码注释与 `examples/`（对外说明以 pkg.go.dev 显示的包文档为准）。
 - 代码注释规范见 Obsidian《代码注释规范》；测试入口与 CI 口径见《测试与 CI》。
 - 修改公共 API、序列化行为、租约或时钟语义前，先读相关文档并同步更新；设计与代码不一致时先讨论再改。
 
