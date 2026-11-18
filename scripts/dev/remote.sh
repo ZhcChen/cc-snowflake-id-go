@@ -39,16 +39,15 @@ echo "==> 同步 $branch 到 $HOST:$dir/src"
 git ls-files -co --exclude-standard -z | COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata --null -T - -czf - |
 	ssh "$HOST" "set -e; mkdir -p '$dir'; rm -rf '$dir/src.new'; mkdir '$dir/src.new'; tar -xzf - -C '$dir/src.new'; rm -rf '$dir/src'; mv '$dir/src.new' '$dir/src'"
 
+# 仓库内每个含 go.mod 的目录是一个模块（根模块与独立子模块，如 ginauth），逐个执行。
+each='for m in $(find . -name go.mod -not -path "./.git/*" -exec dirname {} \; | sort); do echo "== 模块 $m"; (cd "$m" && '
 case $mode in
 test)
-	steps='test -z "$(gofmt -l .)" || { echo "以下文件未格式化："; gofmt -l .; exit 1; }
-go mod tidy -diff
-go vet ./...
-go test -count=1 ./...
-go test -race -count=1 ./...'
+	steps="test -z \"\$(gofmt -l .)\" || { echo 以下文件未格式化：; gofmt -l .; exit 1; }
+${each}go mod tidy -diff && go vet ./... && go test -count=1 ./... && go test -race -count=1 ./...); done"
 	;;
-bench) steps='go test -run "^$" -bench . -benchmem ./...' ;;
-tidy) steps='go mod tidy' ;;
+bench) steps="${each}go test -run '^\$' -bench . -benchmem ./...); done" ;;
+tidy) steps="${each}go mod tidy); done" ;;
 esac
 
 pg_setup=""
@@ -79,8 +78,10 @@ docker run --rm --name '$name-go' --network '$NETWORK' --label '$LABEL' \
 
 if [ "$mode" = tidy ]; then
 	echo "==> 取回 go.mod、go.sum"
-	ssh "$HOST" "cat '$dir/src/go.mod'" >go.mod
-	if ssh "$HOST" "test -f '$dir/src/go.sum'"; then ssh "$HOST" "cat '$dir/src/go.sum'" >go.sum; fi
-	git status --short go.mod go.sum
+	for m in $(find . -name go.mod -not -path "./.git/*" -exec dirname {} \; | sort); do
+		ssh "$HOST" "cat '$dir/src/$m/go.mod'" >"$m/go.mod"
+		if ssh "$HOST" "test -f '$dir/src/$m/go.sum'"; then ssh "$HOST" "cat '$dir/src/$m/go.sum'" >"$m/go.sum"; fi
+	done
+	git status --short -- '*go.mod' '*go.sum'
 fi
 echo "==> 完成"
